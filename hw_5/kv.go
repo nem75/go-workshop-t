@@ -3,10 +3,16 @@ package main
 import (
 	"fmt"
 	st "go-workshop-t/hw_4/store"
+	"io"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
 )
+
+var kvs *st.Store
 
 func main() {
 	args := os.Args[1:]
@@ -20,6 +26,9 @@ func main() {
 	case "write":
 		defer store.Flush()
 		storeValues(store, args)
+	case "daemon":
+		kvs = store
+		runServer()
 	}
 }
 
@@ -29,6 +38,8 @@ func getMode(args []string) (mode string) {
 
 	if len(args) < 1 {
 		mode = "readAll"
+	} else if args[0] == "-d" {
+		mode = "daemon"
 	} else {
 		writeArg := regexp.MustCompile(`^[^=]+=[^=]*$`)
 		writeMode := writeArg.MatchString(args[0])
@@ -65,5 +76,47 @@ func storeValues(s *st.Store, args []string) {
 	for _, arg := range args {
 		splitted := splitWriteArg(arg)
 		s.Set(splitted[0], splitted[1])
+	}
+}
+
+func runServer() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleRequest)
+	http.ListenAndServe(":8080", mux)
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "POST":
+		handlePost(w, r)
+	case "GET":
+		handleGet(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		log.Print(r.Method)
+	}
+}
+
+func handlePost(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Path[1:]
+	value, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer kvs.Flush()
+	kvs.Set(key, string(value))
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+func handleGet(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Path[1:]
+	value := kvs.Get(key)
+
+	if len(value) < 1 {
+		w.WriteHeader(http.StatusNotFound)
+	} else {
+		io.WriteString(w, value)
 	}
 }
